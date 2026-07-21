@@ -1,0 +1,20 @@
+{
+  "name": "training-assessment-tool",
+  "version": "2.0.0",
+  "description": "员工培训考核系统 - 全栈版（支持钉钉扫码免登 + 消息通知）",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "sql.js": "^1.11.0",
+    "multer": "^1.4.5-lts.1",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "axios": "^1.7.9"
+  }
+}
