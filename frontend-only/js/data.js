@@ -1,238 +1,465 @@
 /* ============================================================
-   数据层 - localStorage 持久化（纯前端版）
-   - 所有数据存储在 localStorage
-   - 刷新页面数据不丢失
-   - 与其他前端文件完全兼容（同步读写）
+   数据层 - API 通信模式（跨设备同步版）
+   - 所有数据存储在服务端数据库
+   - 前端缓存 + 乐观更新 + fire-and-forget API 调用
+   - JWT 认证
    - 支持三级角色：super_admin / admin / employee
-   - 操作日志记录
-   - 考试支持参与人员指定、草稿/发布状态
-   - 题型扩展：简答题(short_answer) / 论述题(essay)
-   - 多资料上传：attachments[] 数组
-   - 软删除：deleted 标记，已删除项不再展示
-   - 跨标签页数据同步：storage 事件
+   - 支持主观题、软删除、多附件、批量操作
+   - 跨设备数据实时同步
    ============================================================ */
 
 const DB = (() => {
-  const STORAGE_KEY = 'etms_data';
-  let data = null;
+  // API 基础 URL - 自动检测（同源或配置）
+  const API_BASE = window.API_BASE || '';
 
-  function load() {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      try { data = JSON.parse(raw); } catch { data = null; }
+  // 内存缓存
+  let cache = {
+    categories: [],
+    materials: [],
+    questions: [],
+    exams: [],
+    records: [],
+    progress: [],
+    inprogress: [],
+    users: [],
+    allUsers: [],
+    allMaterials: [],
+    allQuestions: [],
+    allExams: [],
+    logs: [],
+    departments: [],
+    admins: [],
+  };
+
+  // ---------- JWT Token 管理 ----------
+  function getToken() {
+    return localStorage.getItem('etms_token') || '';
+  }
+  function setToken(token) {
+    localStorage.setItem('etms_token', token);
+  }
+  function clearToken() {
+    localStorage.removeItem('etms_token');
+    localStorage.removeItem('etms_session');
+  }
+
+  // ---------- API 请求封装 ----------
+  async function api(method, url, body) {
+    const opts = {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + getToken(),
+      },
+    };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(API_BASE + url, opts);
+    if (res.status === 401) {
+      clearToken();
+      if (App && App.render) App.render();
+      throw new Error('未登录或登录已过期');
     }
-    if (!data) {
-      data = createSeedData();
-      save();
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: '请求失败' }));
+      throw new Error(err.error || '请求失败');
     }
-    // 兼容旧数据：补充缺失字段
-    if (!data.logs) data.logs = [];
-    data.exams.forEach(e => {
-      if (!e.participants) e.participants = [];
-      if (!e.startTime) e.startTime = null;
-      if (!e.deadline) e.deadline = null;
-      if (!e.status) e.status = 'active';
-    });
-    data.users.forEach(u => {
-      if (!u.scope) u.scope = u.role === 'super_admin' ? 'all' : '';
-      if (!u.jobNumber) u.jobNumber = '';
-      if (!u.position) u.position = '';
-      if (u.role === 'admin' && u.id === 'u_admin') u.role = 'super_admin';
-      if (!u.deleted) u.deleted = false;
-    });
-    data.questions.forEach(q => {
-      if (!q.referenceAnswer) q.referenceAnswer = '';
-    });
-    data.materials.forEach(m => {
-      if (!m.attachments) m.attachments = [];
-      if (!m.deleted) m.deleted = false;
-    });
-    data.questions.forEach(q => { if (!q.deleted) q.deleted = false; });
-    data.exams.forEach(e => { if (!e.deleted) e.deleted = false; });
-    data.records.forEach(r => {
-      if (!r.subjectiveGraded) r.subjectiveGraded = false;
-      if (!r.subjectiveScore) r.subjectiveScore = 0;
-    });
-    save();
-    return data;
+    return res.json();
   }
 
-  function save() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  // 乐观更新：先更新缓存，异步调 API，失败则 toast 提示
+  function fireAndForget(method, url, body, errorMsg) {
+    api(method, url, body).catch(err => {
+      toast(errorMsg || err.message, 'error');
+    });
   }
 
-  function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
-
-  // ---------- 种子数据 ----------
-  function createSeedData() {
-    const now = Date.now();
-    const categories = [
-      { id: 'c1', name: '入职培训', icon: '🎯', sortOrder: 0 },
-      { id: 'c2', name: '安全规范', icon: '🛡️', sortOrder: 1 },
-      { id: 'c3', name: '产品知识', icon: '📦', sortOrder: 2 },
-      { id: 'c4', name: '技术培训', icon: '💻', sortOrder: 3 },
-    ];
-    const materials = [
-      { id: 'm1', title: '新员工入职指南', desc: '介绍公司文化、组织架构、规章制度等入职必读内容。', categoryId: 'c1', type: 'doc', cover: '', fileName: '新员工入职指南.docx', fileSize: 1024000, content: '欢迎使用新员工入职指南。\n\n本指南涵盖：\n1. 公司简介与发展历程\n2. 组织架构与各部门职能\n3. 员工行为规范\n4. 薪酬福利体系\n5. 晋升发展通道\n\n请仔细阅读并理解各项内容，这将帮助你快速融入团队。', url: '', uploader: '总管理员', createdAt: now - 86400000 * 7 },
-      { id: 'm2', title: '信息安全管理制度', desc: '公司信息安全管理规范，包括数据保护、密码策略等。', categoryId: 'c2', type: 'pdf', cover: '', fileName: '信息安全管理制度.pdf', fileSize: 2048000, content: '信息安全管理制度\n\n一、数据保护原则\n- 最小权限原则\n- 数据分类分级管理\n- 定期备份机制\n\n二、密码安全策略\n- 密码长度不少于8位\n- 包含大小写字母、数字、特殊字符\n- 每90天更换一次\n- 禁止使用弱密码\n\n三、终端安全\n- 安装杀毒软件并定期更新\n- 离开工位须锁屏\n- 禁止安装未经审批的软件', url: '', uploader: '总管理员', createdAt: now - 86400000 * 5 },
-      { id: 'm3', title: '产品功能演示视频', desc: '公司核心产品的功能介绍与操作演示。', categoryId: 'c3', type: 'video', cover: '', fileName: '产品演示.mp4', fileSize: 51200000, content: '', url: 'https://www.w3schools.com/html/mov_bbb.mp4', uploader: '总管理员', createdAt: now - 86400000 * 3 },
-      { id: 'm4', title: '前端开发规范', desc: '团队前端代码规范与最佳实践。', categoryId: 'c4', type: 'doc', cover: '', fileName: '前端开发规范.docx', fileSize: 8192000, content: '前端开发规范\n\n一、命名规范\n- 组件名使用 PascalCase\n- 变量名使用 camelCase\n- 常量名使用 UPPER_SNAKE_CASE\n\n二、代码结构\n- 单文件不超过 300 行\n- 函数单一职责\n- 必要的注释\n\n三、Git 提交规范\n- feat: 新功能\n- fix: 修复 bug\n- docs: 文档变更\n- refactor: 重构', url: '', uploader: '总管理员', createdAt: now - 86400000 * 2 },
-    ];
-    const questions = [
-      { id: 'q1', type: 'single', stem: '公司员工行为规范中，下列哪项是正确的？', options: ['可以随意泄露公司机密', '离职后可带走公司数据', '遵守保密协议，保护公司信息', '可在社交媒体随意发表公司内部信息'], answer: [2], score: 10, analysis: '员工应严格遵守保密协议，保护公司信息资产安全。', categoryId: 'c2', createdAt: now },
-      { id: 'q2', type: 'single', stem: '公司密码安全策略要求密码长度不少于多少位？', options: ['6位', '8位', '10位', '12位'], answer: [1], score: 10, analysis: '根据信息安全管理制度，密码长度不少于8位。', categoryId: 'c2', createdAt: now },
-      { id: 'q3', type: 'multiple', stem: '以下哪些属于强密码的特征？（多选）', options: ['包含大小写字母', '包含数字', '包含特殊字符', '使用生日或姓名'], answer: [0, 1, 2], score: 15, analysis: '强密码应包含大小写字母、数字和特殊字符，不应使用生日等易猜信息。', categoryId: 'c2', createdAt: now },
-      { id: 'q4', type: 'judge', stem: '员工离开工位时必须锁屏。', options: ['正确', '错误'], answer: [0], score: 5, analysis: '离开工位锁屏是基本的信息安全要求。', categoryId: 'c2', createdAt: now },
-      { id: 'q5', type: 'single', stem: '前端组件命名应使用哪种命名法？', options: ['kebab-case', 'PascalCase', 'camelCase', 'snake_case'], answer: [1], score: 10, analysis: '根据前端开发规范，组件名使用 PascalCase。', categoryId: 'c4', createdAt: now },
-      { id: 'q6', type: 'multiple', stem: '以下哪些是 Git 提交规范的前缀？（多选）', options: ['feat', 'fix', 'docs', 'random'], answer: [0, 1, 2], score: 15, analysis: '规范的前缀包括 feat、fix、docs、refactor 等。', categoryId: 'c4', createdAt: now },
-      { id: 'q7', type: 'judge', stem: '单文件代码可以超过 300 行，无需拆分。', options: ['正确', '错误'], answer: [1], score: 5, analysis: '规范要求单文件不超过 300 行。', categoryId: 'c4', createdAt: now },
-      { id: 'q8', type: 'single', stem: '新员工入职指南中不包括以下哪项内容？', options: ['公司简介', '组织架构', '个人家庭信息', '薪酬福利'], answer: [2], score: 10, analysis: '入职指南涵盖公司简介、组织架构、行为规范、薪酬福利等，不涉及个人家庭信息。', categoryId: 'c1', createdAt: now },
-      { id: 'q9', type: 'multiple', stem: '信息安全管理遵循的原则包括？（多选）', options: ['最小权限原则', '数据分类分级管理', '定期备份机制', '随意共享数据'], answer: [0, 1, 2], score: 15, analysis: '信息安全应遵循最小权限、分类分级、定期备份等原则。', categoryId: 'c2', createdAt: now },
-      { id: 'q10', type: 'judge', stem: '员工可以在工作电脑上安装任何来源的软件。', options: ['正确', '错误'], answer: [1], score: 5, analysis: '禁止安装未经审批的软件。', categoryId: 'c2', createdAt: now, referenceAnswer: '' },
-      { id: 'q11', type: 'short_answer', stem: '请简述信息安全中"最小权限原则"的含义及其重要性。', options: [], answer: [], score: 20, analysis: '最小权限原则要求每位员工仅获取完成工作所需的最低权限。', categoryId: 'c2', createdAt: now, referenceAnswer: '最小权限原则是指仅赋予用户完成其工作职责所需的最低限度权限。其重要性在于：1) 减少误操作风险；2) 降低数据泄露可能性；3) 限制恶意行为的影响范围；4) 符合合规审计要求。' },
-      { id: 'q12', type: 'essay', stem: '结合公司实际情况，论述如何建立一个有效的信息安全管理体系，包括技术手段和管理制度两个层面。', options: [], answer: [], score: 30, analysis: '需从技术和管理两个层面论述。', categoryId: 'c2', createdAt: now, referenceAnswer: '技术层面：1) 建立防火墙和入侵检测系统；2) 实施数据加密传输和存储；3) 定期漏洞扫描和安全评估；4) 部署终端安全管控工具。管理层面：1) 制定信息安全管理制度和操作规范；2) 建立安全事件响应机制；3) 开展定期安全培训和考核；4) 实施权限分级和审计追踪；5) 建立安全问责机制。' },
-    ];
-    const exams = [
-      { id: 'ex1', title: '信息安全基础考核', desc: '检验员工对信息安全管理制度的掌握程度。', categoryId: 'c2', questionIds: ['q1','q2','q3','q4','q9','q10'], duration: 20, passScore: 60, maxAttempts: 3, randomOrder: true, totalScore: 70, status: 'published', startTime: now - 86400000 * 10, deadline: now + 86400000 * 30, participants: ['u_e1','u_e2','u_e3'], createdAt: now },
-      { id: 'ex2', title: '前端开发规范考核', desc: '测试团队前端开发规范掌握情况。', categoryId: 'c4', questionIds: ['q5','q6','q7'], duration: 10, passScore: 60, maxAttempts: 2, randomOrder: false, totalScore: 30, status: 'published', startTime: now - 86400000 * 5, deadline: now + 86400000 * 30, participants: ['u_e1'], createdAt: now },
-      { id: 'ex3', title: '新员工入职考核', desc: '新员工入职培训综合考核。', categoryId: 'c1', questionIds: ['q8'], duration: 10, passScore: 60, maxAttempts: 1, randomOrder: false, totalScore: 10, status: 'draft', startTime: null, deadline: null, participants: [], createdAt: now },
-    ];
-    const users = [
-      { id: 'u_super', username: 'superadmin', password: 'super123', name: '总管理员', role: 'super_admin', dept: '总管理部', scope: 'all', jobNumber: 'SA001', position: '总管理员', createdAt: now },
-      { id: 'u_admin', username: 'admin', password: 'admin123', name: '张主管', role: 'admin', dept: '人力资源部', scope: 'c1,c2', jobNumber: 'A001', position: '培训主管', createdAt: now },
-      { id: 'u_e1', username: 'employee', password: '123456', name: '张明', role: 'employee', dept: '研发部', scope: '', jobNumber: 'E001', position: '前端工程师', createdAt: now },
-      { id: 'u_e2', username: 'lina', password: '123456', name: '李娜', role: 'employee', dept: '市场部', scope: '', jobNumber: 'E002', position: '市场专员', createdAt: now },
-      { id: 'u_e3', username: 'wangwu', password: '123456', name: '王五', role: 'employee', dept: '研发部', scope: '', jobNumber: 'E003', position: '后端工程师', createdAt: now },
-    ];
-    const records = [
-      { id: 'r1', examId: 'ex1', examTitle: '信息安全基础考核', userId: 'u_e1', userName: '张明', dept: '研发部', score: 85, totalScore: 70, passScore: 60, passed: true, answers: {}, details: [], duration: 980000, startedAt: now - 86400000 * 3, submittedAt: now - 86400000 * 3 + 980000, attempt: 1 },
-      { id: 'r2', examId: 'ex1', examTitle: '信息安全基础考核', userId: 'u_e2', userName: '李娜', dept: '市场部', score: 55, totalScore: 70, passScore: 60, passed: false, answers: {}, details: [], duration: 1200000, startedAt: now - 86400000 * 2, submittedAt: now - 86400000 * 2 + 1200000, attempt: 1 },
-      { id: 'r3', examId: 'ex2', examTitle: '前端开发规范考核', userId: 'u_e1', userName: '张明', dept: '研发部', score: 30, totalScore: 30, passScore: 60, passed: true, answers: {}, details: [], duration: 420000, startedAt: now - 86400000, submittedAt: now - 86400000 + 420000, attempt: 1 },
-      { id: 'r4', examId: 'ex1', examTitle: '信息安全基础考核', userId: 'u_e3', userName: '王五', dept: '研发部', score: 70, totalScore: 70, passScore: 60, passed: true, answers: {}, details: [], duration: 760000, startedAt: now - 86400000, submittedAt: now - 86400000 + 760000, attempt: 1 },
-      { id: 'r5', examId: 'ex3', examTitle: '新员工入职考核', userId: 'u_e2', userName: '李娜', dept: '市场部', score: 10, totalScore: 10, passScore: 60, passed: true, answers: {}, details: [], duration: 180000, startedAt: now - 3600000, submittedAt: now - 3600000 + 180000, attempt: 1 },
-    ];
-    const logs = [
-      { id: 'l1', userId: 'u_super', userName: '总管理员', action: 'create_exam', target: 'ex1', detail: '创建考试「信息安全基础考核」', createdAt: now - 86400000 * 10 },
-      { id: 'l2', userId: 'u_super', userName: '总管理员', action: 'publish_exam', target: 'ex1', detail: '发布考试「信息安全基础考核」', createdAt: now - 86400000 * 10 },
-      { id: 'l3', userId: 'u_admin', userName: '张主管', action: 'create_material', target: 'm2', detail: '上传资料「信息安全管理制度」', createdAt: now - 86400000 * 5 },
-    ];
-    return { categories, materials, questions, exams, users, records, progress: [], inprogress: [], logs };
+  // ---------- 初始化：从服务端加载全量数据 ----------
+  async function init() {
+    try {
+      const data = await api('GET', '/api/init');
+      // 将服务端 snake_case 字段转为前端 camelCase
+      cache.categories = data.categories.map(mapCategory);
+      cache.materials = (data.materials || []).map(mapMaterial);
+      cache.questions = (data.questions || []).map(mapQuestion);
+      cache.exams = (data.exams || []).map(mapExam);
+      cache.records = (data.records || []).map(mapRecord);
+      cache.progress = (data.progress || []).map(mapProgress);
+      cache.inprogress = (data.inprogress || []).map(mapInProgress);
+      cache.users = (data.users || []).map(mapUser);
+      cache.allUsers = (data.allUsers || []).map(mapUser);
+      cache.allMaterials = (data.allMaterials || []).map(mapMaterial);
+      cache.allQuestions = (data.allQuestions || []).map(mapQuestion);
+      cache.allExams = (data.allExams || []).map(mapExam);
+      cache.logs = (data.logs || []).map(mapLog);
+      cache.departments = data.departments || [];
+      cache.admins = (data.admins || []).map(mapUser);
+      return true;
+    } catch (err) {
+      toast('数据加载失败: ' + err.message, 'error');
+      return false;
+    }
   }
 
-  // 初始化
-  data = load();
+  // ---------- 字段映射（snake_case → camelCase） ----------
+  function mapCategory(c) {
+    return {
+      id: c.id, name: c.name, icon: c.icon || '📁',
+      sortOrder: c.sort_order || c.sortOrder || 0,
+    };
+  }
+  function mapMaterial(m) {
+    return {
+      id: m.id, title: m.title, desc: m.desc || m.description || '',
+      cover: m.cover || '', categoryId: m.category_id || m.categoryId,
+      type: m.type, fileName: m.file_name || m.fileName || '',
+      fileSize: m.file_size || m.fileSize || 0,
+      filePath: m.file_path || m.filePath || '',
+      url: m.url || '', content: m.content || '',
+      attachments: m.attachments || [],
+      uploader: m.uploader || '', deleted: !!m.deleted,
+      deletedAt: m.deleted_at || m.deletedAt || null,
+      createdAt: m.created_at || m.createdAt || 0,
+    };
+  }
+  function mapQuestion(q) {
+    return {
+      id: q.id, type: q.type, stem: q.stem,
+      options: q.options || [], answer: q.answer || [],
+      score: q.score, analysis: q.analysis || '',
+      referenceAnswer: q.referenceAnswer || q.reference_answer || '',
+      categoryId: q.category_id || q.categoryId,
+      deleted: !!q.deleted, deletedAt: q.deleted_at || q.deletedAt || null,
+      createdAt: q.created_at || q.createdAt || 0,
+    };
+  }
+  function mapExam(e) {
+    return {
+      id: e.id, title: e.title, desc: e.desc || e.description || '',
+      categoryId: e.category_id || e.categoryId,
+      questionIds: e.questionIds || e.question_ids || [],
+      duration: e.duration, passScore: e.pass_score || e.passScore || 60,
+      maxAttempts: e.max_attempts || e.maxAttempts || 3,
+      randomOrder: !!e.randomOrder || !!e.random_order,
+      totalScore: e.total_score || e.totalScore || 0,
+      status: e.status, participants: e.participants || [],
+      startTime: e.start_time || e.startTime || null,
+      deadline: e.deadline || null,
+      deleted: !!e.deleted, deletedAt: e.deleted_at || e.deletedAt || null,
+      createdAt: e.created_at || e.createdAt || 0,
+    };
+  }
+  function mapRecord(r) {
+    return {
+      id: r.id, examId: r.exam_id || r.examId,
+      examTitle: r.exam_title || r.examTitle || '',
+      userId: r.user_id || r.userId, userName: r.user_name || r.userName || '',
+      dept: r.dept || '', score: r.score || 0,
+      totalScore: r.total_score || r.totalScore || 0,
+      passScore: r.pass_score || r.passScore || 60,
+      passed: !!r.passed, answers: r.answers || {}, details: r.details || [],
+      duration: r.duration || 0, startedAt: r.started_at || r.startedAt || 0,
+      submittedAt: r.submitted_at || r.submittedAt || 0, attempt: r.attempt || 1,
+      subjectiveGraded: !!r.subjective_graded || !!r.subjectiveGraded,
+      subjectiveScore: r.subjective_score || r.subjectiveScore || 0,
+    };
+  }
+  function mapProgress(p) {
+    return {
+      id: p.id, userId: p.user_id || p.userId,
+      materialId: p.material_id || p.materialId,
+      completed: !!p.completed, completedAt: p.completed_at || p.completedAt || 0,
+      createdAt: p.created_at || p.createdAt || 0,
+    };
+  }
+  function mapInProgress(ip) {
+    return {
+      id: ip.id, userId: ip.user_id || ip.userId,
+      examId: ip.exam_id || ip.examId,
+      answers: ip.answers || {}, remaining: ip.remaining || 0,
+      startedAt: ip.started_at || ip.startedAt || 0, savedAt: ip.saved_at || ip.savedAt || 0,
+    };
+  }
+  function mapUser(u) {
+    return {
+      id: u.id, username: u.username, name: u.name,
+      role: u.role, dept: u.dept || '', scope: u.scope || '',
+      jobNumber: u.job_number || u.jobNumber || '',
+      position: u.position || '', status: u.status || 'active',
+      createdAt: u.created_at || u.createdAt || 0,
+    };
+  }
+  function mapLog(l) {
+    return {
+      id: l.id, userId: l.user_id || l.userId,
+      userName: l.user_name || l.userName || '',
+      action: l.action, target: l.target || '',
+      detail: l.detail || '', createdAt: l.created_at || l.createdAt || 0,
+    };
+  }
+
+  // ---------- 反向映射（camelCase → snake_case，用于发送到 API） ----------
+  function toSnakeCase(obj) {
+    const map = {
+      categoryId: 'category_id', fileName: 'file_name', fileSize: 'file_size',
+      filePath: 'file_path', referenceAnswer: 'reference_answer',
+      questionIds: 'question_ids', passScore: 'pass_score',
+      maxAttempts: 'max_attempts', randomOrder: 'random_order',
+      totalScore: 'total_score', startTime: 'start_time',
+      subjectiveGraded: 'subjective_graded', subjectiveScore: 'subjective_score',
+      jobNumber: 'job_number', startedAt: 'started_at', submittedAt: 'submitted_at',
+      examTitle: 'exam_title', userName: 'user_name',
+      materialId: 'material_id', userId: 'user_id', completedAt: 'completed_at',
+      sortOrder: 'sort_order',
+    };
+    const result = {};
+    for (const [key, val] of Object.entries(obj)) {
+      result[map[key] || key] = val;
+    }
+    return result;
+  }
 
   // ---------- 通用辅助 ----------
   function findById(arr, id) { return arr.find(x => x.id === id); }
 
   // ---------- 分类 ----------
-  function getCategories() { return data.categories; }
-  function getCategoryById(id) { return findById(data.categories, id); }
-  function addCategory(c) { c.id = c.id || uid(); data.categories.push(c); save(); return c; }
-  function updateCategory(id, p) { const i = data.categories.findIndex(x => x.id === id); if (i !== -1) data.categories[i] = { ...data.categories[i], ...p }; save(); return data.categories[i]; }
-  function deleteCategory(id) { data.categories = data.categories.filter(x => x.id !== id); save(); }
+  function getCategories() { return cache.categories; }
+  function getCategoryById(id) { return findById(cache.categories, id); }
+  function addCategory(c) {
+    const mapped = toSnakeCase(c);
+    mapped.id = mapped.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    const local = mapCategory(mapped);
+    cache.categories.push(local);
+    fireAndForget('POST', '/api/categories', mapped, '添加分类失败');
+    return local;
+  }
+  function updateCategory(id, p) {
+    const i = cache.categories.findIndex(x => x.id === id);
+    if (i !== -1) cache.categories[i] = { ...cache.categories[i], ...mapCategory(toSnakeCase(p)) };
+    fireAndForget('PUT', '/api/categories/' + id, toSnakeCase(p), '更新分类失败');
+    return cache.categories[i];
+  }
+  function deleteCategory(id) {
+    cache.categories = cache.categories.filter(x => x.id !== id);
+    fireAndForget('DELETE', '/api/categories/' + id, null, '删除分类失败');
+  }
 
   // ---------- 资料（支持软删除 + attachments） ----------
-  function getMaterials() { return data.materials.filter(m => !m.deleted); }
-  function getAllMaterials() { return data.materials; }
-  function getMaterialById(id) { return findById(data.materials, id); }
-  function getMaterialsByCategory(cid) { return data.materials.filter(m => m.categoryId === cid && !m.deleted); }
-  function addMaterial(m) { m.id = m.id || uid(); m.createdAt = m.createdAt || Date.now(); m.deleted = false; m.attachments = m.attachments || []; data.materials.push(m); save(); return m; }
-  function updateMaterial(id, p) { const i = data.materials.findIndex(x => x.id === id); if (i !== -1) data.materials[i] = { ...data.materials[i], ...p }; save(); return data.materials[i]; }
-  function softDeleteMaterial(id) { const m = getMaterialById(id); if (m) { m.deleted = true; m.deletedAt = Date.now(); save(); } }
+  function getMaterials() { return cache.materials.filter(m => !m.deleted); }
+  function getAllMaterials() { return cache.allMaterials.length > 0 ? cache.allMaterials : cache.materials; }
+  function getMaterialById(id) { return findById(cache.materials, id) || findById(cache.allMaterials, id); }
+  function getMaterialsByCategory(cid) { return cache.materials.filter(m => m.categoryId === cid && !m.deleted); }
+  function addMaterial(m) {
+    m.id = m.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    m.createdAt = m.createdAt || Date.now();
+    m.deleted = false;
+    m.attachments = m.attachments || [];
+    const local = { ...m };
+    cache.materials.push(local);
+    fireAndForget('POST', '/api/materials', toSnakeCase(m), '添加资料失败');
+    return local;
+  }
+  function updateMaterial(id, p) {
+    const i = cache.materials.findIndex(x => x.id === id);
+    if (i !== -1) cache.materials[i] = { ...cache.materials[i], ...p };
+    fireAndForget('PUT', '/api/materials/' + id, toSnakeCase(p), '更新资料失败');
+    return cache.materials[i];
+  }
+  function softDeleteMaterial(id) {
+    const m = getMaterialById(id);
+    if (m) { m.deleted = true; m.deletedAt = Date.now(); }
+    fireAndForget('PATCH', '/api/materials/' + id + '/soft-delete', null, '删除资料失败');
+  }
+  function deleteMaterial(id) {
+    cache.materials = cache.materials.filter(x => x.id !== id);
+    fireAndForget('DELETE', '/api/materials/' + id, null, '删除资料失败');
+  }
 
   // ---------- 题库（支持软删除 + 主观题） ----------
-  function getQuestions() { return data.questions.filter(q => !q.deleted); }
-  function getAllQuestions() { return data.questions; }
-  function getQuestionById(id) { return findById(data.questions, id); }
-  function getQuestionsByCategory(cid) { return data.questions.filter(q => q.categoryId === cid && !q.deleted); }
-  function addQuestion(q) { q.id = q.id || uid(); q.createdAt = q.createdAt || Date.now(); q.deleted = false; q.referenceAnswer = q.referenceAnswer || ''; data.questions.push(q); save(); return q; }
-  function addQuestionsBatch(arr) { arr.forEach(q => { q.id = q.id || uid(); q.createdAt = q.createdAt || Date.now(); q.deleted = false; q.referenceAnswer = q.referenceAnswer || ''; data.questions.push(q); }); save(); return arr; }
-  function updateQuestion(id, p) { const i = data.questions.findIndex(x => x.id === id); if (i !== -1) data.questions[i] = { ...data.questions[i], ...p }; save(); return data.questions[i]; }
-  function deleteQuestion(id) { data.questions = data.questions.filter(x => x.id !== id); save(); }
-  function softDeleteQuestion(id) { const q = getQuestionById(id); if (q) { q.deleted = true; q.deletedAt = Date.now(); save(); } }
-  function softDeleteQuestionsBatch(ids) { ids.forEach(id => softDeleteQuestion(id)); save(); }
+  function getQuestions() { return cache.questions.filter(q => !q.deleted); }
+  function getAllQuestions() { return cache.allQuestions.length > 0 ? cache.allQuestions : cache.questions; }
+  function getQuestionById(id) { return findById(cache.questions, id) || findById(cache.allQuestions, id); }
+  function getQuestionsByCategory(cid) { return cache.questions.filter(q => q.categoryId === cid && !q.deleted); }
+  function addQuestion(q) {
+    q.id = q.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    q.createdAt = q.createdAt || Date.now();
+    q.deleted = false;
+    q.referenceAnswer = q.referenceAnswer || '';
+    const local = { ...q };
+    cache.questions.push(local);
+    fireAndForget('POST', '/api/questions', toSnakeCase(q), '添加题目失败');
+    return local;
+  }
+  function addQuestionsBatch(arr) {
+    const locals = [];
+    arr.forEach(q => {
+      q.id = q.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+      q.createdAt = q.createdAt || Date.now();
+      q.deleted = false;
+      q.referenceAnswer = q.referenceAnswer || '';
+      const local = { ...q };
+      cache.questions.push(local);
+      locals.push(local);
+    });
+    fireAndForget('POST', '/api/questions/batch', arr.map(toSnakeCase), '批量导入题目失败');
+    return locals;
+  }
+  function updateQuestion(id, p) {
+    const i = cache.questions.findIndex(x => x.id === id);
+    if (i !== -1) cache.questions[i] = { ...cache.questions[i], ...p };
+    fireAndForget('PUT', '/api/questions/' + id, toSnakeCase(p), '更新题目失败');
+    return cache.questions[i];
+  }
+  function deleteQuestion(id) {
+    cache.questions = cache.questions.filter(x => x.id !== id);
+    fireAndForget('DELETE', '/api/questions/' + id, null, '删除题目失败');
+  }
+  function softDeleteQuestion(id) {
+    const q = getQuestionById(id);
+    if (q) { q.deleted = true; q.deletedAt = Date.now(); }
+    fireAndForget('PATCH', '/api/questions/' + id + '/soft-delete', null, '删除题目失败');
+  }
+  function softDeleteQuestionsBatch(ids) {
+    ids.forEach(id => {
+      const q = getQuestionById(id);
+      if (q) { q.deleted = true; q.deletedAt = Date.now(); }
+    });
+    fireAndForget('POST', '/api/questions/batch-soft-delete', { ids }, '批量删除题目失败');
+  }
 
   // ---------- 考试（支持软删除） ----------
-  function getExams() { return data.exams.filter(e => !e.deleted); }
-  function getAllExams() { return data.exams; }
-  function getExamById(id) { return findById(data.exams, id); }
-  function getActiveExams() { return data.exams.filter(e => (e.status === 'published' || e.status === 'active') && !e.deleted); }
-  function getPublishedExams() { return data.exams.filter(e => (e.status === 'published' || e.status === 'active') && !e.deleted); }
-  // 获取某员工可参加的考试
+  function getExams() { return cache.exams.filter(e => !e.deleted); }
+  function getAllExams() { return cache.allExams.length > 0 ? cache.allExams : cache.exams; }
+  function getExamById(id) { return findById(cache.exams, id) || findById(cache.allExams, id); }
+  function getActiveExams() { return cache.exams.filter(e => (e.status === 'published' || e.status === 'active') && !e.deleted); }
+  function getPublishedExams() { return getActiveExams(); }
   function getExamsForEmployee(uid) {
     return getPublishedExams().filter(e => {
-      if (!e.participants || e.participants.length === 0) return true; // 未指定=全员可考
+      if (!e.participants || e.participants.length === 0) return true;
       return e.participants.includes(uid);
     });
   }
-  function addExam(e) { e.id = e.id || uid(); e.createdAt = e.createdAt || Date.now(); e.deleted = false; data.exams.push(e); save(); return e; }
-  function updateExam(id, p) { const i = data.exams.findIndex(x => x.id === id); if (i !== -1) data.exams[i] = { ...data.exams[i], ...p }; save(); return data.exams[i]; }
-  function deleteExam(id) { data.exams = data.exams.filter(x => x.id !== id); save(); }
-  function softDeleteExam(id) { const e = getExamById(id); if (e) { e.deleted = true; e.deletedAt = Date.now(); save(); } }
+  function addExam(e) {
+    e.id = e.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    e.createdAt = e.createdAt || Date.now();
+    e.deleted = false;
+    const local = { ...e };
+    cache.exams.push(local);
+    fireAndForget('POST', '/api/exams', toSnakeCase(e), '添加考试失败');
+    return local;
+  }
+  function updateExam(id, p) {
+    const i = cache.exams.findIndex(x => x.id === id);
+    if (i !== -1) cache.exams[i] = { ...cache.exams[i], ...p };
+    fireAndForget('PUT', '/api/exams/' + id, toSnakeCase(p), '更新考试失败');
+    return cache.exams[i];
+  }
+  function deleteExam(id) {
+    cache.exams = cache.exams.filter(x => x.id !== id);
+    fireAndForget('DELETE', '/api/exams/' + id, null, '删除考试失败');
+  }
+  function softDeleteExam(id) {
+    const e = getExamById(id);
+    if (e) { e.deleted = true; e.deletedAt = Date.now(); }
+    fireAndForget('PATCH', '/api/exams/' + id + '/soft-delete', null, '删除考试失败');
+  }
 
   // ---------- 考试记录（支持主观题评分更新） ----------
-  function getRecords() { return data.records; }
-  function getRecordById(id) { return findById(data.records, id); }
-  function getRecordsByUser(uid) { return data.records.filter(r => r.userId === uid); }
-  function getRecordsByExam(eid) { return data.records.filter(r => r.examId === eid); }
-  function addRecord(r) { r.id = r.id || uid(); r.createdAt = r.createdAt || Date.now(); r.subjectiveGraded = r.subjectiveGraded || false; r.subjectiveScore = r.subjectiveScore || 0; data.records.push(r); save(); return r; }
-  function updateRecord(id, p) { const i = data.records.findIndex(x => x.id === id); if (i !== -1) data.records[i] = { ...data.records[i], ...p }; save(); return data.records[i]; }
-  function deleteRecord(id) { data.records = data.records.filter(x => x.id !== id); save(); }
+  function getRecords() { return cache.records; }
+  function getRecordById(id) { return findById(cache.records, id); }
+  function getRecordsByUser(uid) { return cache.records.filter(r => r.userId === uid); }
+  function getRecordsByExam(eid) { return cache.records.filter(r => r.examId === eid); }
+  function addRecord(r) {
+    r.id = r.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    r.subjectiveGraded = r.subjectiveGraded || false;
+    r.subjectiveScore = r.subjectiveScore || 0;
+    const local = { ...r };
+    cache.records.push(local);
+    fireAndForget('POST', '/api/records', toSnakeCase(r), '提交考试记录失败');
+    return local;
+  }
+  function updateRecord(id, p) {
+    const i = cache.records.findIndex(x => x.id === id);
+    if (i !== -1) cache.records[i] = { ...cache.records[i], ...p };
+    fireAndForget('PUT', '/api/records/' + id, toSnakeCase(p), '更新记录失败');
+    return cache.records[i];
+  }
+  function deleteRecord(id) {
+    cache.records = cache.records.filter(x => x.id !== id);
+    fireAndForget('DELETE', '/api/records/' + id, null, '删除记录失败');
+  }
 
   // ---------- 学习进度 ----------
-  function getProgress() { return data.progress; }
-  function getProgressByUser(uid) { return data.progress.filter(p => p.userId === uid); }
+  function getProgress() { return cache.progress; }
+  function getProgressByUser(uid) { return cache.progress.filter(p => p.userId === uid); }
   function upsertProgress(p) {
-    p.userId = p.userId || App.currentUser.id;
-    const i = data.progress.findIndex(x => x.userId === p.userId && x.materialId === p.materialId);
-    if (i !== -1) data.progress[i] = { ...data.progress[i], ...p };
-    else { p.id = p.id || uid(); p.createdAt = Date.now(); data.progress.push(p); }
-    save();
+    p.userId = p.userId || (App.currentUser ? App.currentUser.id : '');
+    const i = cache.progress.findIndex(x => x.userId === p.userId && x.materialId === p.materialId);
+    if (i !== -1) cache.progress[i] = { ...cache.progress[i], ...p };
+    else { p.id = p.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7); p.createdAt = Date.now(); cache.progress.push(p); }
+    fireAndForget('POST', '/api/progress', toSnakeCase(p), '保存进度失败');
   }
 
   // ---------- 断线续考 ----------
-  function getInProgress(uid) { return data.inprogress.filter(ip => ip.userId === uid); }
-  function getInProgressByExam(uid, eid) { return data.inprogress.find(ip => ip.userId === uid && ip.examId === eid); }
+  function getInProgress(uid) { return cache.inprogress.filter(ip => ip.userId === uid); }
+  function getInProgressByExam(uid, eid) { return cache.inprogress.find(ip => ip.userId === uid && ip.examId === eid); }
   function saveInProgress(ip) {
-    ip.userId = ip.userId || App.currentUser.id;
-    const i = data.inprogress.findIndex(x => x.userId === ip.userId && x.examId === ip.examId);
-    if (i !== -1) data.inprogress[i] = { ...data.inprogress[i], ...ip };
-    else { ip.id = ip.id || uid(); ip.savedAt = Date.now(); data.inprogress.push(ip); }
-    save();
+    ip.userId = ip.userId || (App.currentUser ? App.currentUser.id : '');
+    const i = cache.inprogress.findIndex(x => x.userId === ip.userId && x.examId === ip.examId);
+    if (i !== -1) cache.inprogress[i] = { ...cache.inprogress[i], ...ip };
+    else { ip.id = ip.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7); ip.savedAt = Date.now(); cache.inprogress.push(ip); }
+    fireAndForget('POST', '/api/inprogress', toSnakeCase(ip), '保存续考进度失败');
   }
-  function removeInProgress(uid, eid) { data.inprogress = data.inprogress.filter(x => !(x.userId === uid && x.examId === eid)); save(); }
+  function removeInProgress(uid, eid) {
+    cache.inprogress = cache.inprogress.filter(x => !(x.userId === uid && x.examId === eid));
+    fireAndForget('DELETE', '/api/inprogress/' + eid, null, '清除续考进度失败');
+  }
 
   // ---------- 用户（支持软删除） ----------
-  function getUsers() { return data.users.filter(u => !u.deleted); }
-  function getAllUsers() { return data.users; }
-  function getUserById(id) { return findById(data.users, id); }
-  function addUser(u) { u.id = u.id || uid(); u.createdAt = u.createdAt || Date.now(); u.deleted = false; data.users.push(u); save(); return u; }
-  function updateUser(id, p) { const i = data.users.findIndex(x => x.id === id); if (i !== -1) data.users[i] = { ...data.users[i], ...p }; save(); return data.users[i]; }
-  function deleteUser(id) { data.users = data.users.filter(x => x.id !== id); save(); }
-  function softDeleteUser(id) { const u = getUserById(id); if (u) { u.deleted = true; u.deletedAt = Date.now(); save(); } }
-  // 获取所有部门列表
-  function getDepartments() {
-    const depts = [...new Set(data.users.filter(u => !u.deleted).map(u => u.dept).filter(Boolean))];
-    return depts;
+  function getUsers() { return cache.users.filter(u => u.status !== 'deleted'); }
+  function getAllUsers() { return cache.allUsers.length > 0 ? cache.allUsers : cache.users; }
+  function getUserById(id) { return findById(cache.users, id) || findById(cache.allUsers, id); }
+  function addUser(u) {
+    u.id = u.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    u.createdAt = u.createdAt || Date.now();
+    const local = { ...u };
+    cache.users.push(local);
+    fireAndForget('POST', '/api/users', toSnakeCase(u), '添加用户失败');
+    return local;
   }
-  // 获取管理员列表（不含总管理员）
-  function getAdmins() { return data.users.filter(u => u.role === 'admin' && !u.deleted); }
+  function updateUser(id, p) {
+    const i = cache.users.findIndex(x => x.id === id);
+    if (i !== -1) cache.users[i] = { ...cache.users[i], ...p };
+    // Also update allUsers if present
+    const j = cache.allUsers.findIndex(x => x.id === id);
+    if (j !== -1) cache.allUsers[j] = { ...cache.allUsers[j], ...p };
+    fireAndForget('PUT', '/api/users/' + id, toSnakeCase(p), '更新用户失败');
+    return cache.users[i];
+  }
+  function deleteUser(id) {
+    cache.users = cache.users.filter(x => x.id !== id);
+    cache.allUsers = cache.allUsers.filter(x => x.id !== id);
+    fireAndForget('DELETE', '/api/users/' + id, null, '删除用户失败');
+  }
+  function softDeleteUser(id) {
+    const u = getUserById(id);
+    if (u) { u.status = 'deleted'; }
+    fireAndForget('PATCH', '/api/users/' + id + '/soft-delete', null, '删除用户失败');
+  }
+  function getDepartments() { return cache.departments; }
+  function getAdmins() { return cache.admins; }
 
   // ---------- 操作日志 ----------
-  function getLogs() { return data.logs; }
+  function getLogs() { return cache.logs; }
   function addLog(action, target, detail) {
     const log = {
-      id: uid(),
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
       userId: App.currentUser ? App.currentUser.id : 'system',
       userName: App.currentUser ? App.currentUser.name : '系统',
-      action,
-      target: target || '',
-      detail: detail || '',
+      action, target: target || '', detail: detail || '',
       createdAt: Date.now(),
     };
-    data.logs.push(log);
-    save();
+    cache.logs.push(log);
+    fireAndForget('POST', '/api/logs', toSnakeCase(log), '记录日志失败');
     return log;
   }
 
@@ -243,23 +470,22 @@ const DB = (() => {
     return null;
   }
   function setSession(s) { localStorage.setItem('etms_session', JSON.stringify(s)); }
-  function clearSession() { localStorage.removeItem('etms_session'); }
+  function clearSession() { localStorage.removeItem('etms_session'); clearToken(); }
 
   // ---------- 重置 ----------
-  function resetAll() { data = createSeedData(); save(); }
+  function resetAll() {
+    api('POST', '/api/reset', {}).then(() => init().then(() => App.render())).catch(err => toast(err.message, 'error'));
+  }
 
-  // ---------- 跨标签页数据同步 ----------
-  window.addEventListener('storage', (e) => {
-    if (e.key === STORAGE_KEY && e.newValue) {
-      try { data = JSON.parse(e.newValue); } catch { return; }
-      // 如果当前有活跃页面，重新渲染
-      if (App && App.render) App.render();
-    }
-  });
+  // ---------- 重新加载（从服务端刷新缓存） ----------
+  async function reload() {
+    return init();
+  }
 
   return {
+    init, getToken, setToken, clearToken,
     getCategories, getCategoryById, addCategory, updateCategory, deleteCategory,
-    getMaterials, getAllMaterials, getMaterialById, getMaterialsByCategory, addMaterial, updateMaterial, softDeleteMaterial,
+    getMaterials, getAllMaterials, getMaterialById, getMaterialsByCategory, addMaterial, updateMaterial, softDeleteMaterial, deleteMaterial,
     getQuestions, getAllQuestions, getQuestionById, getQuestionsByCategory, addQuestion, addQuestionsBatch, updateQuestion, deleteQuestion, softDeleteQuestion, softDeleteQuestionsBatch,
     getExams, getAllExams, getExamById, getActiveExams, getPublishedExams, getExamsForEmployee, addExam, updateExam, deleteExam, softDeleteExam,
     getRecords, getRecordById, getRecordsByUser, getRecordsByExam, addRecord, updateRecord, deleteRecord,
@@ -268,6 +494,6 @@ const DB = (() => {
     getUsers, getAllUsers, getUserById, addUser, updateUser, deleteUser, softDeleteUser, getDepartments, getAdmins,
     getLogs, addLog,
     getSession, setSession, clearSession,
-    resetAll,
+    resetAll, reload,
   };
 })();

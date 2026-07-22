@@ -27,6 +27,9 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 // ---------- 中间件 ----------
 app.use(cors());
 app.use(express.json());
+// 静态文件优先从 frontend-only 目录获取（API版前端）
+app.use(express.static(path.join(__dirname, '..', 'frontend-only')));
+// 其次从根目录获取（兼容旧版）
 app.use(express.static(path.join(__dirname, '..')));
 
 // ---------- Multer 文件上传配置 ----------
@@ -142,11 +145,17 @@ app.get('/api/init', auth, (req, res) => {
     materials: DB.getMaterials(),
     questions: DB.getQuestions(),
     exams: DB.getExams(),
-    records: DB.getRecords(),
-    progress: DB.getProgress(),
+    records: req.user.role === 'employee' ? DB.getRecordsByUser(req.user.id) : DB.getRecords(),
+    progress: DB.getProgressByUser(req.user.id),
     inprogress: DB.getInProgressByUser(req.user.id),
     users: (req.user.role === 'admin' || req.user.role === 'super_admin') ? DB.getUsers() : [],
+    allUsers: req.user.role === 'super_admin' ? DB.getAllUsers() : [],
+    allMaterials: req.user.role === 'super_admin' ? DB.getAllMaterials() : [],
+    allQuestions: req.user.role === 'super_admin' ? DB.getAllQuestions() : [],
+    allExams: req.user.role === 'super_admin' ? DB.getAllExams() : [],
     logs: req.user.role === 'super_admin' ? DB.getLogs() : [],
+    departments: DB.getDepartments(),
+    admins: DB.getAdmins(),
     dingtalk: { configured: DingTalk.isConfigured() },
   });
 });
@@ -159,6 +168,8 @@ app.delete('/api/categories/:id', auth, adminOnly, (req, res) => { DB.deleteCate
 
 // ---------- 资料 API ----------
 app.get('/api/materials', auth, (req, res) => res.json(DB.getMaterials()));
+app.get('/api/materials/all', auth, adminOnly, (req, res) => res.json(DB.getAllMaterials()));
+app.get('/api/materials/by-category/:categoryId', auth, (req, res) => res.json(DB.getMaterialsByCategory(req.params.categoryId)));
 app.get('/api/materials/:id', auth, (req, res) => {
   const m = DB.getMaterialById(req.params.id);
   if (!m) return res.status(404).json({ error: '资料不存在' });
@@ -212,6 +223,8 @@ app.delete('/api/materials/:id', auth, adminOnly, (req, res) => {
   DB.deleteMaterial(req.params.id);
   res.json({ ok: true });
 });
+// 软删除资料
+app.patch('/api/materials/:id/soft-delete', auth, adminOnly, (req, res) => { DB.softDeleteMaterial(req.params.id); res.json({ ok: true }); });
 
 // 下载资料文件
 app.get('/api/materials/:id/download', auth, (req, res) => {
@@ -233,17 +246,25 @@ app.get('/api/materials/:id/download', auth, (req, res) => {
 
 // ---------- 题库 API ----------
 app.get('/api/questions', auth, (req, res) => res.json(DB.getQuestions()));
+app.get('/api/questions/all', auth, adminOnly, (req, res) => res.json(DB.getAllQuestions()));
 app.get('/api/questions/:id', auth, (req, res) => {
   const q = DB.getQuestionById(req.params.id);
   if (!q) return res.status(404).json({ error: '题目不存在' });
   res.json(q);
 });
 app.post('/api/questions', auth, adminOnly, (req, res) => res.json(DB.addQuestion(req.body)));
+app.post('/api/questions/batch', auth, adminOnly, (req, res) => res.json(DB.addQuestionsBatch(req.body)));
 app.put('/api/questions/:id', auth, adminOnly, (req, res) => res.json(DB.updateQuestion(req.params.id, req.body)));
 app.delete('/api/questions/:id', auth, adminOnly, (req, res) => { DB.deleteQuestion(req.params.id); res.json({ ok: true }); });
+// 软删除题库
+app.patch('/api/questions/:id/soft-delete', auth, adminOnly, (req, res) => { DB.softDeleteQuestion(req.params.id); res.json({ ok: true }); });
+app.post('/api/questions/batch-soft-delete', auth, adminOnly, (req, res) => { DB.softDeleteQuestionsBatch(req.body.ids); res.json({ ok: true }); });
+// 按分类获取题目
+app.get('/api/questions/by-category/:categoryId', auth, (req, res) => res.json(DB.getQuestionsByCategory(req.params.categoryId)));
 
 // ---------- 考试 API ----------
 app.get('/api/exams', auth, (req, res) => res.json(DB.getExams()));
+app.get('/api/exams/all', auth, adminOnly, (req, res) => res.json(DB.getAllExams()));
 app.get('/api/exams/:id', auth, (req, res) => {
   const e = DB.getExamById(req.params.id);
   if (!e) return res.status(404).json({ error: '考试不存在' });
@@ -262,6 +283,15 @@ app.post('/api/exams', auth, adminOnly, async (req, res) => {
 });
 app.put('/api/exams/:id', auth, adminOnly, (req, res) => res.json(DB.updateExam(req.params.id, req.body)));
 app.delete('/api/exams/:id', auth, adminOnly, (req, res) => { DB.deleteExam(req.params.id); res.json({ ok: true }); });
+// 软删除考试
+app.patch('/api/exams/:id/soft-delete', auth, adminOnly, (req, res) => { DB.softDeleteExam(req.params.id); res.json({ ok: true }); });
+// 按分类获取考试
+app.get('/api/exams/by-category/:categoryId', auth, (req, res) => {
+  const exams = DB.getExams().filter(e => e.categoryId === req.params.categoryId || e.category_id === req.params.categoryId);
+  res.json(exams);
+});
+// 员工可参加的考试
+app.get('/api/exams/for-employee', auth, (req, res) => res.json(DB.getExamsForEmployee(req.user.id)));
 
 // ---------- 考试记录 API ----------
 app.get('/api/records', auth, (req, res) => {
@@ -269,6 +299,7 @@ app.get('/api/records', auth, (req, res) => {
   if (req.user.role === 'employee') return res.json(DB.getRecordsByUser(req.user.id));
   res.json(DB.getRecords());
 });
+app.get('/api/records/by-exam/:examId', auth, adminOnly, (req, res) => res.json(DB.getRecordsByExam(req.params.examId)));
 app.get('/api/records/:id', auth, (req, res) => {
   const r = DB.getRecordById(req.params.id);
   if (!r) return res.status(404).json({ error: '记录不存在' });
@@ -286,13 +317,22 @@ app.post('/api/records', auth, async (req, res) => {
   } catch (e) { /* 通知失败不影响提交 */ }
   res.json(record);
 });
+app.put('/api/records/:id', auth, adminOnly, (req, res) => res.json(DB.updateRecord(req.params.id, req.body)));
 app.delete('/api/records/:id', auth, adminOnly, (req, res) => { DB.deleteRecord(req.params.id); res.json({ ok: true }); });
 
 // ---------- 用户 API ----------
 app.get('/api/users', auth, adminOnly, (req, res) => res.json(DB.getUsers()));
+app.get('/api/users/all', auth, adminOnly, (req, res) => res.json(DB.getAllUsers()));
+app.get('/api/users/admins', auth, adminOnly, (req, res) => res.json(DB.getAdmins()));
+app.get('/api/users/departments', auth, (req, res) => res.json(DB.getDepartments()));
 app.post('/api/users', auth, adminOnly, (req, res) => res.json(DB.addUser(req.body)));
 app.put('/api/users/:id', auth, adminOnly, (req, res) => res.json(DB.updateUser(req.params.id, req.body)));
 app.delete('/api/users/:id', auth, adminOnly, (req, res) => { DB.deleteUser(req.params.id); res.json({ ok: true }); });
+// 软删除用户
+app.patch('/api/users/:id/soft-delete', auth, adminOnly, (req, res) => {
+  DB.updateUser(req.params.id, { status: 'deleted' });
+  res.json({ ok: true });
+});
 
 // ---------- 学习进度 API ----------
 app.get('/api/progress', auth, (req, res) => res.json(DB.getProgressByUser(req.user.id)));
@@ -325,7 +365,7 @@ app.post('/api/dingtalk/notify', auth, adminOnly, async (req, res) => {
 
 // ---------- SPA 路由兜底 ----------
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'index.html'));
+  res.sendFile(path.join(__dirname, '..', 'frontend-only', 'index.html'));
 });
 
 // ---------- 启动 ----------

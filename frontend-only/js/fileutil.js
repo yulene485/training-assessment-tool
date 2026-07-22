@@ -6,7 +6,9 @@
    ============================================================ */
 
 const FileUtil = (() => {
-  const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8MB（localStorage 上限）
+  const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB（服务端上传上限）
+
+  const API_BASE = window.API_BASE || '';
 
   function readAsBase64(file) {
     return new Promise((resolve, reject) => {
@@ -32,7 +34,7 @@ const FileUtil = (() => {
     if (m.filePath || m.file_path) {
       const token = localStorage.getItem('etms_token') || '';
       const a = document.createElement('a');
-      a.href = `/api/materials/${m.id}/download?token=${token}`;
+      a.href = API_BASE + `/api/materials/${m.id}/download?token=${token}`;
       a.download = m.fileName || m.file_name || m.title;
       document.body.appendChild(a);
       a.click();
@@ -87,7 +89,7 @@ const FileUtil = (() => {
     if (m.fileData) return m.fileData;
     if (m.filePath || m.file_path) {
       const token = localStorage.getItem('etms_token') || '';
-      return `/api/materials/${m.id}/download?token=${token}`;
+      return API_BASE + `/api/materials/${m.id}/download?token=${token}`;
     }
     if (m.url) return m.url;
     return null;

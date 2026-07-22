@@ -14,6 +14,13 @@
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+  <!-- API 后端地址配置：部署时修改为实际后端服务地址 -->
+  <script>
+    // 同源部署（前后端在同一服务器）时留空 ''
+    // 跨域部署（前端在 Cloudflare Pages，后端在 Railway）时填后端完整地址，如：
+    // window.API_BASE = 'https://training-assessment-tool.up.railway.app';
+    window.API_BASE = '';
+  </script>
   <script src="js/data.js"></script>
   <script src="js/fileutil.js"></script>
   <script src="js/admin.js"></script>

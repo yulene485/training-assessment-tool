@@ -480,43 +480,60 @@ const Admin = (() => {
         const processAttachments = () => {
           const attachments = pendingAttachments.map(a => {
             if (a.isNew && a._file) {
-              // 新上传的文件需异步读取 base64
               return { fileName: a._file.name, fileSize: a._file.size, type: a.type, name: a._file.name };
             }
             return { fileName: a.fileName, fileSize: a.fileSize, type: a.type, fileData: a.fileData, url: a.url, content: a.content };
           });
           return attachments;
         };
-        const data = {
-          title,
-          categoryId: document.getElementById('m_category').value,
-          type,
-          cover: pendingCoverDataUrl,
-          url: document.getElementById('m_url') ? document.getElementById('m_url').value.trim() : '',
-          content: document.getElementById('m_content').value,
-          desc: document.getElementById('m_desc').value.trim(),
-          attachments: processAttachments(),
-        };
-        // 从附件中提取主文件信息（第一个附件）
+        const attachments = processAttachments();
+        // 使用 FormData 上传文件到后端 API
+        const apiBase = window.API_BASE || '';
+        const token = DB.getToken();
+        const formData = new FormData();
+        formData.append('title', title);
+        formData.append('categoryId', document.getElementById('m_category').value);
+        formData.append('type', type);
+        formData.append('url', document.getElementById('m_url') ? document.getElementById('m_url').value.trim() : '');
+        formData.append('content', document.getElementById('m_content').value);
+        formData.append('desc', document.getElementById('m_desc').value.trim());
+        formData.append('cover', pendingCoverDataUrl);
+        formData.append('attachments', JSON.stringify(attachments));
+        // 主文件（第一个附件）
         if (pendingAttachments.length > 0) {
           const mainAttach = pendingAttachments[0];
-          data.fileName = mainAttach.fileName || mainAttach.name || mainAttach._file?.name || '';
-          data.fileSize = mainAttach.fileSize || mainAttach._file?.size || 0;
           if (mainAttach.isNew && mainAttach._file) {
-            data._file = mainAttach._file;
-          } else if (mainAttach.fileData) {
-            data.fileData = mainAttach.fileData;
+            formData.append('file', mainAttach._file);
           }
-        } else if (m) {
-          data.fileName = m.fileName; data.fileSize = m.fileSize;
-          data.filePath = m.filePath;
-          if (!data.url) data.url = m.url;
         }
-        if (m) { DB.updateMaterial(id, data); DB.addLog('update_material', id, `编辑资料「${title}」`); toast('资料已更新', 'success'); }
-        else { data.uploader = App.currentUser.name; DB.addMaterial(data); DB.addLog('create_material', '', `上传资料「${title}」`); toast('资料上传成功', 'success'); }
+        // 异步上传
+        const url = m ? apiBase + '/api/materials/' + id : apiBase + '/api/materials';
+        const method = m ? 'PUT' : 'POST';
+        fetch(url, {
+          method,
+          headers: { 'Authorization': 'Bearer ' + token },
+          body: formData,
+        }).then(res => {
+          if (!res.ok) throw new Error('上传失败');
+          return res.json();
+        }).then(saved => {
+          // 更新本地缓存
+          if (m) {
+            const i = DB.getAllMaterials().findIndex(x => x.id === id);
+            if (i !== -1) Object.assign(DB.getAllMaterials()[i], saved);
+            DB.addLog('update_material', id, `编辑资料「${title}」`);
+            toast('资料已更新', 'success');
+          } else {
+            DB.getAllMaterials().push(saved);
+            DB.addLog('create_material', '', `上传资料「${title}」`);
+            toast('资料上传成功', 'success');
+          }
+          DB.reload().then(() => App.render());
+        }).catch(err => {
+          toast('资料上传失败: ' + err.message, 'error');
+        });
         pendingFile = null;
         pendingAttachments = [];
-        App.render();
         return true;
       }
     });
@@ -545,7 +562,7 @@ const Admin = (() => {
     const files = input.files;
     if (!files || files.length === 0) return;
     for (const file of files) {
-      if (file.size > FileUtil.MAX_FILE_SIZE) { toast(`${file.name} 超过 8MB 限制，已跳过`, 'warning'); continue; }
+      if (file.size > FileUtil.MAX_FILE_SIZE) { toast(`${file.name} 超过 50MB 限制，已跳过`, 'warning'); continue; }
       // 推断类型
       let type = 'file';
       if (file.type.startsWith('video/')) type = 'video';

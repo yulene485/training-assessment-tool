@@ -148,42 +148,104 @@ const App = (() => {
 
   function init() {
     const session = DB.getSession();
-    if (session && session.user) {
+    const token = DB.getToken();
+    if (session && session.user && token) {
       currentUser = session.user;
-      const routes = getRoutes();
-      currentRoute = session.route || (routes[currentRoute] ? currentRoute : Object.keys(routes)[0]);
+      // 从服务端加载最新数据
+      DB.init().then(() => {
+        const routes = getRoutes();
+        currentRoute = session.route || (routes[currentRoute] ? currentRoute : Object.keys(routes)[0]);
+        render();
+      }).catch(() => {
+        // Token过期，清除登录状态
+        currentUser = null;
+        DB.clearSession();
+        render();
+      });
+    } else {
+      render();
     }
-    render();
   }
 
-  function login(username, password) {
-    const user = DB.getUsers().find(u => u.username === username && u.password === password);
-    if (!user) { toast('用户名或密码错误', 'error'); return false; }
-    if (user.status === 'disabled') { toast('该账号已停用，请联系管理员', 'error'); return false; }
-    currentUser = { ...user };
-    delete currentUser.password;
-    const routes = getRoutes();
-    currentRoute = Object.keys(routes)[0];
-    DB.setSession({ user: currentUser, route: currentRoute });
-    DB.addLog('login', '', `登录系统`);
-    render();
-    toast(`欢迎回来，${currentUser.name}`, 'success');
-    return true;
+  async function login(username, password) {
+    try {
+      const res = await fetch((window.API_BASE || '') + '/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: '登录失败' }));
+        toast(err.error || '用户名或密码错误', 'error');
+        return false;
+      }
+      const data = await res.json();
+      DB.setToken(data.token);
+      currentUser = data.user;
+      // 加载全量数据
+      await DB.init();
+      const routes = getRoutes();
+      currentRoute = Object.keys(routes)[0];
+      DB.setSession({ user: currentUser, route: currentRoute });
+      DB.addLog('login', '', `登录系统`);
+      render();
+      toast(`欢迎回来，${currentUser.name}`, 'success');
+      return true;
+    } catch (err) {
+      toast('登录失败: ' + err.message, 'error');
+      return false;
+    }
   }
 
-  // 钉钉OAuth登录（前端版仅显示按钮，实际登录需后端）
-  function dingtalkLogin() {
-    // 检测是否有后端服务
-    const backendUrl = window.DINGTALK_BACKEND_URL || '';
-    if (!backendUrl) {
-      toast('钉钉登录需部署全栈版本，请联系管理员配置', 'warning');
+  // 钉钉OAuth登录（通过后端API）
+  async function dingtalkLogin() {
+    const apiBase = window.API_BASE || '';
+    if (!apiBase) {
+      toast('钉钉登录需配置后端服务地址', 'warning');
       return;
     }
-    // 跳转钉钉OAuth授权页面
-    const corpId = window.DINGTALK_CORP_ID || '';
-    const redirectUrl = encodeURIComponent(backendUrl + '/auth/dingtalk/callback');
-    const authUrl = `https://login.dingtalk.com/oauth2/auth?redirect_uri=${redirectUrl}&response_type=code&client_id=${window.DINGTALK_APP_KEY || ''}&scope=openid&state=etms&prompt=consent`;
-    window.location.href = authUrl;
+    try {
+      const status = await (await fetch(apiBase + '/api/auth/dingtalk/status')).json();
+      if (!status.configured) {
+        toast('钉钉登录未配置，请联系管理员', 'warning');
+        return;
+      }
+      // 跳转钉钉OAuth授权页面
+      const callbackUrl = encodeURIComponent(window.location.origin + window.location.pathname + '?dingtalk=1');
+      const authUrl = `https://login.dingtalk.com/oauth2/auth?redirect_uri=${callbackUrl}&response_type=code&client_id=${status.appKey}&scope=openid&state=etms&prompt=consent`;
+      window.location.href = authUrl;
+    } catch (err) {
+      toast('钉钉登录配置获取失败', 'error');
+    }
+  }
+
+  // 处理钉钉回调
+  async function handleDingtalkCallback(authCode) {
+    try {
+      const res = await fetch((window.API_BASE || '') + '/api/auth/dingtalk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ authCode }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: '钉钉登录失败' }));
+        toast(err.error || '钉钉登录失败', 'error');
+        return false;
+      }
+      const data = await res.json();
+      DB.setToken(data.token);
+      currentUser = data.user;
+      await DB.init();
+      const routes = getRoutes();
+      currentRoute = Object.keys(routes)[0];
+      DB.setSession({ user: currentUser, route: currentRoute });
+      render();
+      toast(`欢迎回来，${currentUser.name}`, 'success');
+      return true;
+    } catch (err) {
+      toast('钉钉登录失败: ' + err.message, 'error');
+      return false;
+    }
   }
 
   function logout() {
@@ -340,20 +402,32 @@ const App = (() => {
     `;
   }
 
-  function doLogin() {
+  async function doLogin() {
     const username = document.getElementById('login_username').value.trim();
     const password = document.getElementById('login_password').value.trim();
     if (!username || !password) { toast('请输入用户名和密码', 'error'); return; }
-    login(username, password);
+    await login(username, password);
   }
 
   return {
-    init, navigate, logout, doLogin, dingtalkLogin,
+    init, navigate, logout, doLogin, dingtalkLogin, handleDingtalkCallback,
     get currentUser() { return currentUser; },
     get currentRoute() { return currentRoute; },
     render,
   };
 })();
 
-// 启动
-document.addEventListener('DOMContentLoaded', App.init);
+// 启动 - 检查钉钉回调参数
+document.addEventListener('DOMContentLoaded', () => {
+  // 检查URL中的钉钉回调authCode
+  const urlParams = new URLSearchParams(window.location.search);
+  const authCode = urlParams.get('authCode') || urlParams.get('code');
+  if (authCode) {
+    // 清除URL参数，避免重复处理
+    const cleanUrl = window.location.pathname;
+    window.history.replaceState({}, '', cleanUrl);
+    App.handleDingtalkCallback(authCode);
+  } else {
+    App.init();
+  }
+});

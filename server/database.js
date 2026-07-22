@@ -62,7 +62,10 @@ async function initDB() {
       file_path TEXT DEFAULT '',
       url TEXT DEFAULT '',
       content TEXT DEFAULT '',
+      attachments TEXT DEFAULT '[]',
       uploader TEXT DEFAULT '',
+      deleted INTEGER NOT NULL DEFAULT 0,
+      deleted_at INTEGER DEFAULT NULL,
       created_at INTEGER NOT NULL
     );
 
@@ -74,7 +77,10 @@ async function initDB() {
       answer TEXT NOT NULL DEFAULT '[]',
       score INTEGER NOT NULL DEFAULT 10,
       analysis TEXT DEFAULT '',
+      reference_answer TEXT DEFAULT '',
       category_id TEXT NOT NULL,
+      deleted INTEGER NOT NULL DEFAULT 0,
+      deleted_at INTEGER DEFAULT NULL,
       created_at INTEGER NOT NULL
     );
 
@@ -93,6 +99,8 @@ async function initDB() {
       participants TEXT DEFAULT '[]',
       start_time INTEGER DEFAULT NULL,
       deadline INTEGER DEFAULT NULL,
+      deleted INTEGER NOT NULL DEFAULT 0,
+      deleted_at INTEGER DEFAULT NULL,
       created_at INTEGER NOT NULL
     );
 
@@ -112,7 +120,9 @@ async function initDB() {
       duration INTEGER DEFAULT 0,
       started_at INTEGER DEFAULT 0,
       submitted_at INTEGER NOT NULL,
-      attempt INTEGER NOT NULL DEFAULT 1
+      attempt INTEGER NOT NULL DEFAULT 1,
+      subjective_graded INTEGER NOT NULL DEFAULT 0,
+      subjective_score INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS progress (
@@ -155,9 +165,19 @@ async function initDB() {
   try { db.exec('ALTER TABLE users ADD COLUMN position TEXT DEFAULT \'\''); } catch {}
   try { db.exec('ALTER TABLE users ADD COLUMN status TEXT DEFAULT \'active\''); } catch {}
   try { db.exec('ALTER TABLE materials ADD COLUMN cover TEXT DEFAULT \'\''); } catch {}
+  try { db.exec('ALTER TABLE materials ADD COLUMN attachments TEXT DEFAULT \'[]\''); } catch {}
+  try { db.exec('ALTER TABLE materials ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0'); } catch {}
+  try { db.exec('ALTER TABLE materials ADD COLUMN deleted_at INTEGER DEFAULT NULL'); } catch {}
   try { db.exec('ALTER TABLE exams ADD COLUMN participants TEXT DEFAULT \'[]\''); } catch {}
   try { db.exec('ALTER TABLE exams ADD COLUMN start_time INTEGER DEFAULT NULL'); } catch {}
   try { db.exec('ALTER TABLE exams ADD COLUMN deadline INTEGER DEFAULT NULL'); } catch {}
+  try { db.exec('ALTER TABLE exams ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0'); } catch {}
+  try { db.exec('ALTER TABLE exams ADD COLUMN deleted_at INTEGER DEFAULT NULL'); } catch {}
+  try { db.exec('ALTER TABLE questions ADD COLUMN reference_answer TEXT DEFAULT \'\''); } catch {}
+  try { db.exec('ALTER TABLE questions ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0'); } catch {}
+  try { db.exec('ALTER TABLE questions ADD COLUMN deleted_at INTEGER DEFAULT NULL'); } catch {}
+  try { db.exec('ALTER TABLE records ADD COLUMN subjective_graded INTEGER NOT NULL DEFAULT 0'); } catch {}
+  try { db.exec('ALTER TABLE records ADD COLUMN subjective_score INTEGER NOT NULL DEFAULT 0'); } catch {}
 
   seed();
   save();
@@ -208,7 +228,11 @@ function seed() {
   db.exec(`INSERT INTO questions (id, type, stem, options, answer, score, analysis, category_id, created_at) VALUES ('q7', 'judge', '单文件代码可以超过 300 行，无需拆分。', '${J(['正确', '错误'])}', '${J([1])}', 5, '规范要求单文件不超过 300 行。', 'c4', ${now})`);
   db.exec(`INSERT INTO questions (id, type, stem, options, answer, score, analysis, category_id, created_at) VALUES ('q8', 'single', '新员工入职指南中不包括以下哪项内容？', '${J(['公司简介', '组织架构', '个人家庭信息', '薪酬福利'])}', '${J([2])}', 10, '入职指南涵盖公司简介、组织架构、行为规范、薪酬福利等，不涉及个人家庭信息。', 'c1', ${now})`);
   db.exec(`INSERT INTO questions (id, type, stem, options, answer, score, analysis, category_id, created_at) VALUES ('q9', 'multiple', '信息安全管理遵循的原则包括？（多选）', '${J(['最小权限原则', '数据分类分级管理', '定期备份机制', '随意共享数据'])}', '${J([0, 1, 2])}', 15, '信息安全应遵循最小权限、分类分级、定期备份等原则。', 'c2', ${now})`);
-  db.exec(`INSERT INTO questions (id, type, stem, options, answer, score, analysis, category_id, created_at) VALUES ('q10', 'judge', '员工可以在工作电脑上安装任何来源的软件。', '${J(['正确', '错误'])}', '${J([1])}', 5, '禁止安装未经审批的软件。', 'c2', ${now})`);
+  db.exec(`INSERT INTO questions (id, type, stem, options, answer, score, analysis, reference_answer, category_id, created_at) VALUES ('q10', 'judge', '员工可以在工作电脑上安装任何来源的软件。', '${J(['正确', '错误'])}', '${J([1])}', 5, '禁止安装未经审批的软件。', '', 'c2', ${now})`);
+
+  // 主观题种子数据
+  db.exec(`INSERT INTO questions (id, type, stem, options, answer, score, analysis, reference_answer, category_id, created_at) VALUES ('q11', 'short_answer', '请简述信息安全中"最小权限原则"的含义及其重要性。', '${J([])}', '${J([])}', 20, '最小权限原则要求每位员工仅获取完成工作所需的最低权限。', '最小权限原则是指仅赋予用户完成其工作职责所需的最低限度权限。其重要性在于：1) 减少误操作风险；2) 降低数据泄露可能性；3) 限制恶意行为的影响范围；4) 符合合规审计要求。', 'c2', ${now})`);
+  db.exec(`INSERT INTO questions (id, type, stem, options, answer, score, analysis, reference_answer, category_id, created_at) VALUES ('q12', 'essay', '结合公司实际情况，论述如何建立一个有效的信息安全管理体系，包括技术手段和管理制度两个层面。', '${J([])}', '${J([])}', 30, '需从技术和管理两个层面论述。', '技术层面：1) 建立防火墙和入侵检测系统；2) 实施数据加密传输和存储；3) 定期漏洞扫描和安全评估；4) 部署终端安全管控工具。管理层面：1) 制定信息安全管理制度和操作规范；2) 建立安全事件响应机制；3) 开展定期安全培训和考核；4) 实施权限分级和审计追踪；5) 建立安全问责机制。', 'c2', ${now})`);
 
   db.exec(`INSERT INTO exams (id, title, desc, category_id, question_ids, duration, pass_score, max_attempts, random_order, total_score, status, participants, start_time, deadline, created_at) VALUES ('ex1', '信息安全基础考核', '检验员工对信息安全管理制度的掌握程度。', 'c2', '${J(['q1','q2','q3','q4','q9','q10'])}', 20, 60, 3, 1, 70, 'published', '${J(['u_e1','u_e2','u_e3'])}', ${now - 86400000 * 10}, ${now + 86400000 * 30}, ${now})`);
   db.exec(`INSERT INTO exams (id, title, desc, category_id, question_ids, duration, pass_score, max_attempts, random_order, total_score, status, participants, start_time, deadline, created_at) VALUES ('ex2', '前端开发规范考核', '测试团队前端开发规范掌握情况。', 'c4', '${J(['q5','q6','q7'])}', 10, 60, 2, 0, 30, 'published', '${J(['u_e1'])}', ${now - 86400000 * 5}, ${now + 86400000 * 30}, ${now})`);
@@ -272,7 +296,8 @@ function parseJSON(field) {
 module.exports = {
   db, initDB, save,
   // 用户
-  getUsers: () => all('users').map(u => ({ ...u, password: undefined })),
+  getUsers: () => all('users').filter(u => u.status !== 'deleted').map(u => ({ ...u, password: undefined })),
+  getAllUsers: () => all('users').map(u => ({ ...u, password: undefined })),
   getUserById: id => { const u = get('users', id); return u ? { ...u, password: undefined } : null; },
   getUserByIdWithPassword: id => get('users', id), // 含密码（登录用）
   getAdmins: () => all('users').filter(u => u.role === 'admin').map(u => ({ ...u, password: undefined })),
@@ -304,42 +329,51 @@ module.exports = {
   updateCategory: (id, p) => update('categories', id, p),
   deleteCategory: id => del('categories', id),
   // 资料
-  getMaterials: () => all('materials'),
-  getMaterialById: id => get('materials', id),
+  getMaterials: () => all('materials').filter(m => !m.deleted).map(m => ({ ...m, attachments: parseJSON(m.attachments) })),
+  getAllMaterials: () => all('materials').map(m => ({ ...m, attachments: parseJSON(m.attachments) })),
+  getMaterialById: id => { const m = get('materials', id); return m ? { ...m, attachments: parseJSON(m.attachments) } : null; },
   getMaterialsByCategory: cid => {
     const results = db.exec(`SELECT * FROM materials WHERE category_id = ?`, [cid]);
     if (!results[0]) return [];
     const cols = results[0].columns;
-    return results[0].values.map(row => { const obj = {}; cols.forEach((c, i) => obj[c] = row[i]); return obj; });
+    return results[0].values.map(row => { const obj = {}; cols.forEach((c, i) => obj[c] = row[i]); return { ...obj, attachments: parseJSON(obj.attachments) }; }).filter(m => !m.deleted);
   },
-  addMaterial: m => { m.id = m.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7); m.created_at = m.created_at || Date.now(); return insert('materials', m); },
-  updateMaterial: (id, p) => update('materials', id, p),
+  addMaterial: m => { m.id = m.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7); m.created_at = m.created_at || Date.now(); if (m.attachments) m.attachments = JSON.stringify(m.attachments); m.deleted = 0; return insert('materials', m); },
+  updateMaterial: (id, p) => { if (p.attachments) p.attachments = JSON.stringify(p.attachments); return update('materials', id, p); },
   deleteMaterial: id => del('materials', id),
+  softDeleteMaterial: id => update('materials', id, { deleted: 1, deleted_at: Date.now() }),
   // 题库
-  getQuestions: () => all('questions').map(q => ({ ...q, options: parseJSON(q.options), answer: parseJSON(q.answer) })),
-  getQuestionById: id => { const q = get('questions', id); return q ? { ...q, options: parseJSON(q.options), answer: parseJSON(q.answer) } : null; },
+  getQuestions: () => all('questions').filter(q => !q.deleted).map(q => ({ ...q, options: parseJSON(q.options), answer: parseJSON(q.answer), referenceAnswer: q.reference_answer || '' })),
+  getAllQuestions: () => all('questions').map(q => ({ ...q, options: parseJSON(q.options), answer: parseJSON(q.answer), referenceAnswer: q.reference_answer || '' })),
+  getQuestionById: id => { const q = get('questions', id); return q ? { ...q, options: parseJSON(q.options), answer: parseJSON(q.answer), referenceAnswer: q.reference_answer || '', deleted: !!q.deleted } : null; },
   getQuestionsByCategory: cid => {
-    const rows = all('questions').filter(q => q.category_id === cid);
-    return rows.map(q => ({ ...q, options: parseJSON(q.options), answer: parseJSON(q.answer) }));
+    const rows = all('questions').filter(q => q.category_id === cid && !q.deleted);
+    return rows.map(q => ({ ...q, options: parseJSON(q.options), answer: parseJSON(q.answer), referenceAnswer: q.reference_answer || '' }));
   },
-  addQuestion: q => { q.id = q.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7); q.options = JSON.stringify(q.options || []); q.answer = JSON.stringify(q.answer || []); q.created_at = q.created_at || Date.now(); return insert('questions', q); },
-  updateQuestion: (id, p) => { if (p.options) p.options = JSON.stringify(p.options); if (p.answer) p.answer = JSON.stringify(p.answer); return update('questions', id, p); },
+  addQuestion: q => { q.id = q.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7); q.options = JSON.stringify(q.options || []); q.answer = JSON.stringify(q.answer || []); q.reference_answer = q.referenceAnswer || q.reference_answer || ''; q.created_at = q.created_at || Date.now(); q.deleted = 0; return insert('questions', q); },
+  addQuestionsBatch: arr => { const results = []; arr.forEach(q => { q.id = q.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7); q.options = JSON.stringify(q.options || []); q.answer = JSON.stringify(q.answer || []); q.reference_answer = q.referenceAnswer || q.reference_answer || ''; q.created_at = q.created_at || Date.now(); q.deleted = 0; results.push(insert('questions', q)); }); return results; },
+  updateQuestion: (id, p) => { if (p.options) p.options = JSON.stringify(p.options); if (p.answer) p.answer = JSON.stringify(p.answer); if (p.referenceAnswer) p.reference_answer = p.referenceAnswer; return update('questions', id, p); },
   deleteQuestion: id => del('questions', id),
+  softDeleteQuestion: id => update('questions', id, { deleted: 1, deleted_at: Date.now() }),
+  softDeleteQuestionsBatch: ids => { ids.forEach(id => update('questions', id, { deleted: 1, deleted_at: Date.now() })); return { ok: true }; },
   // 考试
-  getExams: () => all('exams').map(e => ({ ...e, questionIds: parseJSON(e.question_ids), randomOrder: !!e.random_order, participants: parseJSON(e.participants) })),
-  getExamById: id => { const e = get('exams', id); return e ? { ...e, questionIds: parseJSON(e.question_ids), randomOrder: !!e.random_order, participants: parseJSON(e.participants) } : null; },
-  getActiveExams: () => all('exams').filter(e => e.status === 'published' || e.status === 'active').map(e => ({ ...e, questionIds: parseJSON(e.question_ids), randomOrder: !!e.random_order, participants: parseJSON(e.participants) })),
-  getPublishedExams: () => all('exams').filter(e => e.status === 'published' || e.status === 'active').map(e => ({ ...e, questionIds: parseJSON(e.question_ids), randomOrder: !!e.random_order, participants: parseJSON(e.participants) })),
-  getExamsForEmployee: uid => all('exams').filter(e => (e.status === 'published' || e.status === 'active') && (!parseJSON(e.participants).length || parseJSON(e.participants).includes(uid))).map(e => ({ ...e, questionIds: parseJSON(e.question_ids), randomOrder: !!e.random_order, participants: parseJSON(e.participants) })),
-  addExam: e => { e.id = e.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7); e.question_ids = JSON.stringify(e.questionIds || e.question_ids || []); if (e.participants) e.participants = JSON.stringify(e.participants); e.created_at = e.created_at || Date.now(); return insert('exams', e); },
+  getExams: () => all('exams').filter(e => !e.deleted).map(e => ({ ...e, questionIds: parseJSON(e.question_ids), randomOrder: !!e.random_order, participants: parseJSON(e.participants) })),
+  getAllExams: () => all('exams').map(e => ({ ...e, questionIds: parseJSON(e.question_ids), randomOrder: !!e.random_order, participants: parseJSON(e.participants) })),
+  getExamById: id => { const e = get('exams', id); return e ? { ...e, questionIds: parseJSON(e.question_ids), randomOrder: !!e.random_order, participants: parseJSON(e.participants), deleted: !!e.deleted } : null; },
+  getActiveExams: () => all('exams').filter(e => (e.status === 'published' || e.status === 'active') && !e.deleted).map(e => ({ ...e, questionIds: parseJSON(e.question_ids), randomOrder: !!e.random_order, participants: parseJSON(e.participants) })),
+  getPublishedExams: () => all('exams').filter(e => (e.status === 'published' || e.status === 'active') && !e.deleted).map(e => ({ ...e, questionIds: parseJSON(e.question_ids), randomOrder: !!e.random_order, participants: parseJSON(e.participants) })),
+  getExamsForEmployee: uid => all('exams').filter(e => (e.status === 'published' || e.status === 'active') && !e.deleted && (!parseJSON(e.participants).length || parseJSON(e.participants).includes(uid))).map(e => ({ ...e, questionIds: parseJSON(e.question_ids), randomOrder: !!e.random_order, participants: parseJSON(e.participants) })),
+  addExam: e => { e.id = e.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7); e.question_ids = JSON.stringify(e.questionIds || e.question_ids || []); if (e.participants) e.participants = JSON.stringify(e.participants); e.created_at = e.created_at || Date.now(); e.deleted = 0; return insert('exams', e); },
   updateExam: (id, p) => { if (p.questionIds) p.question_ids = JSON.stringify(p.questionIds); if (p.randomOrder !== undefined) p.random_order = p.randomOrder ? 1 : 0; if (p.participants) p.participants = JSON.stringify(p.participants); return update('exams', id, p); },
   deleteExam: id => del('exams', id),
+  softDeleteExam: id => update('exams', id, { deleted: 1, deleted_at: Date.now() }),
   // 考试记录
-  getRecords: () => all('records').map(r => ({ ...r, answers: parseJSON(r.answers), details: parseJSON(r.details), passed: !!r.passed })),
-  getRecordById: id => { const r = get('records', id); return r ? { ...r, answers: parseJSON(r.answers), details: parseJSON(r.details), passed: !!r.passed } : null; },
-  getRecordsByUser: uid => all('records').filter(r => r.user_id === uid).map(r => ({ ...r, answers: parseJSON(r.answers), details: parseJSON(r.details), passed: !!r.passed })),
-  getRecordsByExam: eid => all('records').filter(r => r.exam_id === eid).map(r => ({ ...r, answers: parseJSON(r.answers), details: parseJSON(r.details), passed: !!r.passed })),
-  addRecord: r => { r.id = r.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7); r.answers = JSON.stringify(r.answers || {}); r.details = JSON.stringify(r.details || []); r.passed = r.passed ? 1 : 0; r.submitted_at = r.submitted_at || Date.now(); r.created_at = r.created_at || Date.now(); return insert('records', r); },
+  getRecords: () => all('records').map(r => ({ ...r, answers: parseJSON(r.answers), details: parseJSON(r.details), passed: !!r.passed, subjectiveGraded: !!r.subjective_graded, subjectiveScore: r.subjective_score || 0 })),
+  getRecordById: id => { const r = get('records', id); return r ? { ...r, answers: parseJSON(r.answers), details: parseJSON(r.details), passed: !!r.passed, subjectiveGraded: !!r.subjective_graded, subjectiveScore: r.subjective_score || 0 } : null; },
+  getRecordsByUser: uid => all('records').filter(r => r.user_id === uid).map(r => ({ ...r, answers: parseJSON(r.answers), details: parseJSON(r.details), passed: !!r.passed, subjectiveGraded: !!r.subjective_graded, subjectiveScore: r.subjective_score || 0 })),
+  getRecordsByExam: eid => all('records').filter(r => r.exam_id === eid).map(r => ({ ...r, answers: parseJSON(r.answers), details: parseJSON(r.details), passed: !!r.passed, subjectiveGraded: !!r.subjective_graded, subjectiveScore: r.subjective_score || 0 })),
+  addRecord: r => { r.id = r.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7); r.answers = JSON.stringify(r.answers || {}); r.details = JSON.stringify(r.details || []); r.passed = r.passed ? 1 : 0; r.subjective_graded = r.subjectiveGraded ? 1 : 0; r.subjective_score = r.subjectiveScore || 0; r.submitted_at = r.submitted_at || Date.now(); r.created_at = r.created_at || Date.now(); return insert('records', r); },
+  updateRecord: (id, p) => { if (p.answers) p.answers = JSON.stringify(p.answers); if (p.details) p.details = JSON.stringify(p.details); if (p.passed !== undefined) p.passed = p.passed ? 1 : 0; if (p.subjectiveGraded !== undefined) p.subjective_graded = p.subjectiveGraded ? 1 : 0; if (p.subjectiveScore !== undefined) p.subjective_score = p.subjectiveScore; return update('records', id, p); },
   deleteRecord: id => del('records', id),
   // 学习进度
   getProgress: () => all('progress').map(p => ({ ...p, completed: !!p.completed })),
